@@ -1,7 +1,7 @@
 pragma solidity ^0.8.23;
 
 import "./EntryPointSimulations.sol";
-import "@account-abstraction/utils/Exec.sol";
+import "account-abstraction/utils/Exec.sol";
 
 contract PimlicoEntryPointSimulations {
     EntryPointSimulations internal eps = new EntryPointSimulations();

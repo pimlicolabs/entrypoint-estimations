@@ -4,7 +4,7 @@ pragma solidity ^0.8.23;
 /* solhint-disable avoid-low-level-calls */
 /* solhint-disable no-inline-assembly */
 
-import "@account-abstraction/core/EntryPoint.sol";
+import "account-abstraction/core/EntryPoint.sol";
 import "./IEntryPointSimulations.sol";
 
 /*
