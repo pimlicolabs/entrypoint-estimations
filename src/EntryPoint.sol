@@ -78,26 +78,22 @@ contract EntryPoint is
 
     /**
      * Execute a user operation.
-     * @param opIndex    - Index into the opInfo array.
      * @param userOp     - The userOp to execute.
      * @param opInfo     - The opInfo filled by validatePrepayment for this userOp.
      * @return collected - The total amount this userOp paid.
      */
     function _executeUserOp(
-        uint256 opIndex,
         PackedUserOperation calldata userOp,
         UserOpInfo memory opInfo
     ) internal returns (uint256 collected, uint256 paymasterPostOpGasLimit) {
         uint256 preGas = gasleft();
         bytes memory context = getMemoryBytesFromOffset(opInfo.contextOffset);
-        bool success;
         {
             uint256 saveFreePtr;
             assembly ("memory-safe") {
                 saveFreePtr := mload(0x40)
             }
             bytes calldata callData = userOp.callData;
-            bytes memory innerCall;
             bytes4 methodSig;
             assembly {
                 let len := callData.length
@@ -110,65 +106,18 @@ contract EntryPoint is
                     IAccountExecute.executeUserOp,
                     (userOp, opInfo.userOpHash)
                 );
-                innerCall = abi.encodeCall(
-                    this.innerHandleOp,
-                    (executeUserOp, opInfo, context)
-                );
-            } else {
-                innerCall = abi.encodeCall(
-                    this.innerHandleOp,
-                    (callData, opInfo, context)
-                );
-            }
-            assembly ("memory-safe") {
-                success := call(
-                    gas(),
-                    address(),
-                    0,
-                    add(innerCall, 0x20),
-                    mload(innerCall),
-                    0,
-                    32
-                )
-                collected := mload(0)
-                paymasterPostOpGasLimit := mload(0x20)
-                mstore(0x40, saveFreePtr)
-            }
-        }
-        if (!success) {
-            bytes32 innerRevertCode;
-            assembly ("memory-safe") {
-                let len := returndatasize()
-                if eq(32, len) {
-                    returndatacopy(0, 0, 32)
-                    innerRevertCode := mload(0)
-                }
-            }
-            if (innerRevertCode == INNER_OUT_OF_GAS) {
-                // handleOps was called with gas limit too low. abort entire bundle.
-                //can only be caused by bundler (leaving not enough gas for inner call)
-                revert FailedOp(opIndex, "AA95 out of gas");
-            } else if (innerRevertCode == INNER_REVERT_LOW_PREFUND) {
-                // innerCall reverted on prefund too low. treat entire prefund as "gas cost"
-                uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
-                uint256 actualGasCost = opInfo.prefund;
-                emitPrefundTooLow(opInfo);
-                emitUserOperationEvent(opInfo, false, actualGasCost, actualGas);
-                collected = actualGasCost;
-            } else {
-                emit PostOpRevertReason(
-                    opInfo.userOpHash,
-                    opInfo.mUserOp.sender,
-                    opInfo.mUserOp.nonce,
-                    Exec.getReturnData(REVERT_REASON_MAX_LEN)
-                );
-
-                uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
-                (collected, paymasterPostOpGasLimit) = _postExecution(
-                    IPaymaster.PostOpMode.postOpReverted,
+                (collected, paymasterPostOpGasLimit) = innerHandleOp(
+                    executeUserOp,
                     opInfo,
                     context,
-                    actualGas
+                    preGas
+                );
+            } else {
+                (collected, paymasterPostOpGasLimit) = innerHandleOp(
+                    callData,
+                    opInfo,
+                    context,
+                    preGas
                 );
             }
         }
@@ -353,13 +302,9 @@ contract EntryPoint is
     function innerHandleOp(
         bytes memory callData,
         UserOpInfo memory opInfo,
-        bytes calldata context
-    )
-        external
-        returns (uint256 actualGasCost, uint256 paymasterPostOpGasLimit)
-    {
-        uint256 preGas = gasleft();
-        require(msg.sender == address(this), "AA92 internal call only");
+        bytes memory context,
+        uint256 preGas
+    ) public returns (uint256 actualGasCost, uint256 paymasterPostOpGasLimit) {
         MemoryUserOp memory mUserOp = opInfo.mUserOp;
 
         uint256 callGasLimit = mUserOp.callGasLimit;
@@ -371,10 +316,7 @@ contract EntryPoint is
                     mUserOp.paymasterPostOpGasLimit +
                     INNER_GAS_OVERHEAD
             ) {
-                assembly ("memory-safe") {
-                    mstore(0, INNER_OUT_OF_GAS)
-                    revert(0, 32)
-                }
+                revert FailedOp(0, "AA95 out of gas");
             }
         }
 
@@ -775,10 +717,22 @@ contract EntryPoint is
                         {
 
                         } catch {
-                            bytes memory reason = Exec.getReturnData(
-                                REVERT_REASON_MAX_LEN
+                            emit PostOpRevertReason(
+                                opInfo.userOpHash,
+                                opInfo.mUserOp.sender,
+                                opInfo.mUserOp.nonce,
+                                Exec.getReturnData(REVERT_REASON_MAX_LEN)
                             );
-                            revert PostOpReverted(reason);
+                            actualGas = preGas - gasleft() + opInfo.preOpGas;
+                            (
+                                actualGasCost,
+                                paymasterPostOpGasLimit
+                            ) = _postExecution(
+                                IPaymaster.PostOpMode.postOpReverted,
+                                opInfo,
+                                context,
+                                actualGas
+                            );
                         }
                         paymasterPostOpGasLimit = remainingGas - gasleft();
                     }
@@ -813,10 +767,15 @@ contract EntryPoint is
                         actualGas
                     );
                 } else {
-                    assembly ("memory-safe") {
-                        mstore(0, INNER_REVERT_LOW_PREFUND)
-                        revert(0, 32)
-                    }
+                    actualGas = preGas - gasleft() + opInfo.preOpGas;
+                    actualGasCost = opInfo.prefund;
+                    emitPrefundTooLow(opInfo);
+                    emitUserOperationEvent(
+                        opInfo,
+                        false,
+                        actualGasCost,
+                        actualGas
+                    );
                 }
             } else {
                 uint256 refund = prefund - actualGasCost;

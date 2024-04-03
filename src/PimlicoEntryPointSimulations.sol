@@ -6,7 +6,8 @@ import "account-abstraction/utils/Exec.sol";
 contract PimlicoEntryPointSimulations {
     EntryPointSimulations internal eps = new EntryPointSimulations();
 
-    uint256 private constant REVERT_REASON_MAX_LEN = 2048;
+    uint256 private constant REVERT_REASON_MAX_LEN =
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff;
     bytes4 private constant selector =
         bytes4(keccak256("delegateAndRevert(address,bytes)"));
 
