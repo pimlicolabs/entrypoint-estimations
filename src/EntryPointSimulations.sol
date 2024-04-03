@@ -4,7 +4,7 @@ pragma solidity ^0.8.23;
 /* solhint-disable avoid-low-level-calls */
 /* solhint-disable no-inline-assembly */
 
-import "account-abstraction/core/EntryPoint.sol";
+import "./EntryPoint.sol";
 import "./IEntryPointSimulations.sol";
 
 /*
@@ -62,7 +62,8 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         _simulationOnlyValidations(userOp);
         (
             uint256 validationData,
-            uint256 paymasterValidationData
+            uint256 paymasterValidationData,
+            uint256 paymasterVerificationGasLimit
         ) = _validatePrepayment(0, userOp, outOpInfo);
 
         _validateAccountAndPaymasterValidationData(
@@ -142,10 +143,15 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         _simulationOnlyValidations(op);
         (
             uint256 validationData,
-            uint256 paymasterValidationData
+            uint256 paymasterValidationData,
+            uint256 paymasterVerificationGasLimit
         ) = _validatePrepayment(0, op, opInfo);
 
-        uint256 paid = _executeUserOp(0, op, opInfo);
+        (uint256 paid, uint256 paymasterPostOpGasLimit) = _executeUserOp(
+            0,
+            op,
+            opInfo
+        );
 
         return
             ExecutionResult(
@@ -153,6 +159,8 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
                 paid,
                 validationData,
                 paymasterValidationData,
+                paymasterVerificationGasLimit,
+                paymasterPostOpGasLimit,
                 false,
                 "0x"
             );

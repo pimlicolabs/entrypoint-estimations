@@ -2,7 +2,7 @@
 pragma solidity >=0.7.5;
 
 import "account-abstraction/interfaces/PackedUserOperation.sol";
-import "account-abstraction/interfaces/IEntryPoint.sol";
+import "./IEntryPoint.sol";
 
 interface IEntryPointSimulations is IEntryPoint {
     struct TargetCallResult {
@@ -11,12 +11,19 @@ interface IEntryPointSimulations is IEntryPoint {
         bytes returnData;
     }
 
+    struct PaymasterDataResult {
+        uint256 paymasterVerificationGasLimit;
+        uint256 paymasterPostOpGasLimit;
+    }
+
     // Return value of simulateHandleOp.
     struct ExecutionResult {
         uint256 preOpGas;
         uint256 paid;
         uint256 accountValidationData;
         uint256 paymasterValidationData;
+        uint256 paymasterVerificationGasLimit;
+        uint256 paymasterPostOpGasLimit;
         bool targetSuccess;
         bytes targetResult;
     }
