@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import {Script, console} from "forge-std/Script.sol";
+import "forge-std/Script.sol";
 import "../src/PimlicoEntryPointSimulations.sol";
 
 contract PimlicoEntryPointSimulationsScript is Script {
@@ -11,8 +11,15 @@ contract PimlicoEntryPointSimulationsScript is Script {
         public
         returns (address pimlicoEntryPointSimulationsAddress)
     {
+        address deployerSigner = vm.envAddress("SIGNER");
+        bytes32 salt = vm.envBytes32("SALT");
+
+        vm.startBroadcast(deployerSigner);
+
         pimlicoEntryPointSimulationsAddress = address(
-            new PimlicoEntryPointSimulations()
+            new PimlicoEntryPointSimulations{salt: salt}()
         );
+
+        vm.stopBroadcast();
     }
 }
