@@ -662,21 +662,23 @@ contract EntryPoint is
         }
 
         bytes memory context;
+        uint256 remainingGas = gasleft();
         if (mUserOp.paymaster != address(0)) {
-            uint256 remainingGas = gasleft();
             (context, paymasterValidationData) = _validatePaymasterPrepayment(
                 opIndex,
                 userOp,
                 outOpInfo,
                 requiredPreFund
             );
-            paymasterVerificationGasLimit = remainingGas - gasleft();
         }
         unchecked {
             outOpInfo.prefund = requiredPreFund;
             outOpInfo.contextOffset = getOffsetOfMemoryBytes(context);
             outOpInfo.preOpGas = preGas - gasleft() + userOp.preVerificationGas;
         }
+        paymasterVerificationGasLimit =
+            ((remainingGas - gasleft()) * 115) /
+            100;
     }
 
     /**
