@@ -22,11 +22,11 @@ for pair in "${pairs[@]}"; do
     --broadcast \
     -vvvv
 
-  forge verify-contract 0x82F92A31dd69e23f71E3e1674450979Efb434269 src/PimlicoEntryPointSimulations.sol:PimlicoEntryPointSimulations \
+  forge verify-contract 0xb02456A0eC77837B22156CBA2FF53E662b326713 src/PimlicoEntryPointSimulations.sol:PimlicoEntryPointSimulations \
     --verifier-url "$ETHERSCAN_URL" \
     --etherscan-api-key "$ETHERSCAN_KEY"
 
-  forge verify-contract 0x1672E79fa2FA04D5675c264f2581B073a850BF63 src/EntryPointSimulations.sol:EntryPointSimulations \
+  forge verify-contract 0xda121459aeFC83948C76345E27551f1269b7853b src/EntryPointSimulations.sol:EntryPointSimulations \
     --verifier-url "$ETHERSCAN_URL" \
     --etherscan-api-key "$ETHERSCAN_KEY"
 
