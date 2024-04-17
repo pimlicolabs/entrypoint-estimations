@@ -22,13 +22,21 @@ for pair in "${pairs[@]}"; do
     --broadcast \
     -vvvv
 
-  forge verify-contract 0xb02456A0eC77837B22156CBA2FF53E662b326713 src/PimlicoEntryPointSimulations.sol:PimlicoEntryPointSimulations \
-    --verifier-url "$ETHERSCAN_URL" \
-    --etherscan-api-key "$ETHERSCAN_KEY"
+  # Verify contracts only if ETHERSCAN_KEY and ETHERSCAN_URL are provided
+  if [[ -n "$ETHERSCAN_KEY" && -n "$ETHERSCAN_URL" ]]; then
+    echo "Verifying with $ETHERSCAN_URL using key $ETHERSCAN_KEY"
 
-  forge verify-contract 0xda121459aeFC83948C76345E27551f1269b7853b src/EntryPointSimulations.sol:EntryPointSimulations \
-    --verifier-url "$ETHERSCAN_URL" \
-    --etherscan-api-key "$ETHERSCAN_KEY"
+    forge verify-contract 0xb02456A0eC77837B22156CBA2FF53E662b326713 src/PimlicoEntryPointSimulations.sol:PimlicoEntryPointSimulations \
+      --verifier-url "$ETHERSCAN_URL" \
+      --etherscan-api-key "$ETHERSCAN_KEY"
+
+    forge verify-contract 0xda121459aeFC83948C76345E27551f1269b7853b src/EntryPointSimulations.sol:EntryPointSimulations \
+      --verifier-url "$ETHERSCAN_URL" \
+      --etherscan-api-key "$ETHERSCAN_KEY"
+
+  else
+    echo "Skipping contract verification as ETHERSCAN_KEY and/or ETHERSCAN_URL are not provided."
+  fi
 
 
   # Use CHAIN and KEY as needed
