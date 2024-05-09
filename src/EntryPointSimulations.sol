@@ -56,14 +56,14 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     /// @inheritdoc IEntryPointSimulations
     function simulateValidation(
         PackedUserOperation calldata userOp
-    ) external returns (ValidationResult memory) {
+    ) public returns (ValidationResult memory) {
         UserOpInfo memory outOpInfo;
 
         _simulationOnlyValidations(userOp);
         (
             uint256 validationData,
             uint256 paymasterValidationData,
-            uint256 paymasterVerificationGasLimit
+            // uint256 paymasterVerificationGasLimit
         ) = _validatePrepayment(0, userOp, outOpInfo);
 
         _validateAccountAndPaymasterValidationData(
@@ -115,6 +115,28 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
             );
     }
 
+    function simulateValidationBulk(
+        PackedUserOperation[] calldata userOps
+    ) public returns (ValidationResult[] memory) {
+        ValidationResult[] memory results = new ValidationResult[](userOps.length);
+
+        for (uint256 i = 0; i < userOps.length; i++) {
+            ValidationResult memory result = simulateValidation(userOps[i]);
+
+            results[i] = result;
+        }
+
+        return results;
+    }
+
+    function simulateValidationLast(
+        PackedUserOperation[] calldata userOps
+    ) external returns (ValidationResult memory) {
+        ValidationResult[] memory results = simulateValidationBulk(userOps);
+
+        return results[userOps.length - 1];
+    }
+
     function simulateCallData(
         PackedUserOperation calldata op,
         address target,
@@ -138,7 +160,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     /// @inheritdoc IEntryPointSimulations
     function simulateHandleOp(
         PackedUserOperation calldata op
-    ) external nonReentrant returns (ExecutionResult memory) {
+    ) public nonReentrant returns (ExecutionResult memory) {
         UserOpInfo memory opInfo;
         _simulationOnlyValidations(op);
         (
@@ -163,6 +185,28 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
                 false,
                 "0x"
             );
+    }
+
+    function simulateHandleOpBulk(
+        PackedUserOperation[] calldata ops
+    ) public nonReentrant returns (ExecutionResult[] memory) {
+        ExecutionResult[] memory results = new ExecutionResult[](ops.length);
+
+        for (uint256 i = 0; i < ops.length; i++) {
+            ExecutionResult memory result = simulateHandleOp(ops[i]);
+
+            results[i] = result;
+        }
+
+        return results;
+    }
+
+    function simulateHandleOpLast(
+        PackedUserOperation[] calldata ops
+    ) external nonReentrant returns (ExecutionResult memory) {
+        ExecutionResult[] memory results = simulateHandleOpBulk(ops);
+
+        return results[ops.length - 1];
     }
 
     function _simulationOnlyValidations(
