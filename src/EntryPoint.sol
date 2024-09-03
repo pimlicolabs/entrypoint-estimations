@@ -711,9 +711,15 @@ contract EntryPoint is
                     actualGasCost = actualGas * gasPrice;
                     if (mode != IPaymaster.PostOpMode.postOpReverted) {
                         uint256 remainingGas = gasleft();
-                        IPaymaster(paymaster).postOp{gas: mUserOp.paymasterPostOpGasLimit}(
+                        try IPaymaster(paymaster).postOp{gas: mUserOp.paymasterPostOpGasLimit}(
                             mode, context, actualGasCost, gasPrice
-                        )
+                        ) {} catch (bytes memory reason) {
+                            revert FailedOpWithRevert(
+                                0,
+                                "AA50 postOp reverted",
+                                reason
+                            );
+                        }
                         //try
                         //    IPaymaster(paymaster).postOp{
                         //        gas: mUserOp.paymasterPostOpGasLimit
