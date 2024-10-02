@@ -63,8 +63,9 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         (
             uint256 validationData,
             uint256 paymasterValidationData,
-            // uint256 paymasterVerificationGasLimit
-        ) = _validatePrepayment(0, userOp, outOpInfo);
+
+        ) = // uint256 paymasterVerificationGasLimit
+            _validatePrepayment(0, userOp, outOpInfo);
 
         _validateAccountAndPaymasterValidationData(
             0,
@@ -118,7 +119,9 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     function simulateValidationBulk(
         PackedUserOperation[] calldata userOps
     ) public returns (ValidationResult[] memory) {
-        ValidationResult[] memory results = new ValidationResult[](userOps.length);
+        ValidationResult[] memory results = new ValidationResult[](
+            userOps.length
+        );
 
         for (uint256 i = 0; i < userOps.length; i++) {
             ValidationResult memory result = simulateValidation(userOps[i]);
@@ -148,13 +151,37 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
 
         bool targetSuccess;
         bytes memory targetResult;
-        uint256 usedGas;
+        uint256 minGas = 21000;
+        uint256 maxGas = uint128(uint256(op.accountGasLimits));
+        uint256 optimalGas = maxGas;
         if (target != address(0)) {
-            uint256 remainingGas = gasleft();
-            (targetSuccess, targetResult) = target.call(targetCallData);
-            usedGas = remainingGas - gasleft();
+            while (minGas <= maxGas) {
+                uint256 midGas = (minGas + maxGas) / 2;
+
+                try this.tryCall{gas: midGas}(target, targetCallData) {
+                    // If the call is successful, reduce the maxGas and store this as the candidate
+                    optimalGas = midGas;
+                    maxGas = midGas - 1;
+                } catch {
+                    // If it fails, we need more gas, so increase the minGas
+                    minGas = midGas + 1;
+                }
+            }
         }
-        return TargetCallResult(usedGas, targetSuccess, targetResult);
+
+        return TargetCallResult(optimalGas, targetSuccess, targetResult);
+    }
+
+    error innerCallResult(uint256 remainingGas);
+
+    function tryCall(address target, bytes memory targetCallData) external {
+        // Use a low-level call to the target contract with the specified gas
+        (bool success, ) = target.call(targetCallData);
+
+        // Revert if the call fails
+        require(success, "Target call failed");
+
+        // Otherwise, if successful, the function will exit normally
     }
 
     function simulateCallDataBulk(
