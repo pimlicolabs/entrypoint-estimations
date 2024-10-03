@@ -6,6 +6,9 @@ pragma solidity ^0.8.23;
 
 import "./EntryPoint.sol";
 import "./IEntryPointSimulations.sol";
+import {UserOperationLib} from "account-abstraction/core/UserOperationLib.sol";
+import {IEntryPoint as EP} from "account-abstraction/interfaces/IEntryPoint.sol";
+import {console} from "forge-std/console.sol";
 
 /*
  * This contract inherits the EntryPoint and extends it with the view-only methods that are executed by
@@ -13,33 +16,27 @@ import "./IEntryPointSimulations.sol";
  * This contract should never be deployed on-chain and is only used as a parameter for the "eth_call" request.
  */
 contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
-    // solhint-disable-next-line var-name-mixedcase
-    AggregatorStakeInfo private NOT_AGGREGATED =
-        AggregatorStakeInfo(address(0), StakeInfo(0, 0));
-
+    EntryPointSimulations immutable thisContract = this;
+    AggregatorStakeInfo private NOT_AGGREGATED = AggregatorStakeInfo(address(0), StakeInfo(0, 0));
     SenderCreator private _senderCreator;
+
+    struct CallSimulationArgs {
+        PackedUserOperation op;
+        address target;
+        bytes targetCallData;
+    }
+
+    // Thrown when the binary search fails due hitting the simulation gasLimit.
+    error OutOfGas(uint256 optimalGas, uint256 minGas, uint256 maxGas, bool success, bytes result);
+    error innerCallResult(uint256 remainingGas);
 
     function initSenderCreator() internal virtual {
         //this is the address of the first contract created with CREATE by this address.
-        address createdObj = address(
-            uint160(
-                uint256(
-                    keccak256(
-                        abi.encodePacked(hex"d694", address(this), hex"01")
-                    )
-                )
-            )
-        );
+        address createdObj = address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", address(this), hex"01")))));
         _senderCreator = SenderCreator(createdObj);
     }
 
-    function senderCreator()
-        internal
-        view
-        virtual
-        override
-        returns (SenderCreator)
-    {
+    function senderCreator() internal view virtual override returns (SenderCreator) {
         // return the same senderCreator as real EntryPoint.
         // this call is slightly (100) more expensive than EntryPoint's access to immutable member
         return _senderCreator;
@@ -49,41 +46,24 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
      * simulation contract should not be deployed, and specifically, accounts should not trust
      * it as entrypoint, since the simulation functions don't check the signatures
      */
-    constructor() {
-        // require(block.number < 100, "should not be deployed");
-    }
+    constructor() {}
 
     /// @inheritdoc IEntryPointSimulations
-    function simulateValidation(
-        PackedUserOperation calldata userOp
-    ) public returns (ValidationResult memory) {
+    function simulateValidation(PackedUserOperation calldata userOp) public returns (ValidationResult memory) {
         UserOpInfo memory outOpInfo;
 
         _simulationOnlyValidations(userOp);
-        (
-            uint256 validationData,
-            uint256 paymasterValidationData,
+        (uint256 validationData, uint256 paymasterValidationData,) = // uint256 paymasterVerificationGasLimit
+         _validatePrepayment(0, userOp, outOpInfo);
 
-        ) = // uint256 paymasterVerificationGasLimit
-            _validatePrepayment(0, userOp, outOpInfo);
+        _validateAccountAndPaymasterValidationData(0, validationData, paymasterValidationData, address(0));
 
-        _validateAccountAndPaymasterValidationData(
-            0,
-            validationData,
-            paymasterValidationData,
-            address(0)
-        );
-
-        StakeInfo memory paymasterInfo = _getStakeInfo(
-            outOpInfo.mUserOp.paymaster
-        );
+        StakeInfo memory paymasterInfo = _getStakeInfo(outOpInfo.mUserOp.paymaster);
         StakeInfo memory senderInfo = _getStakeInfo(outOpInfo.mUserOp.sender);
         StakeInfo memory factoryInfo;
         {
             bytes calldata initCode = userOp.initCode;
-            address factory = initCode.length >= 20
-                ? address(bytes20(initCode[0:20]))
-                : address(0);
+            address factory = initCode.length >= 20 ? address(bytes20(initCode[0:20])) : address(0);
             factoryInfo = _getStakeInfo(factory);
         }
 
@@ -97,31 +77,17 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         );
 
         AggregatorStakeInfo memory aggregatorInfo = NOT_AGGREGATED;
-        if (
-            uint160(aggregator) != SIG_VALIDATION_SUCCESS &&
-            uint160(aggregator) != SIG_VALIDATION_FAILED
-        ) {
-            aggregatorInfo = AggregatorStakeInfo(
-                aggregator,
-                _getStakeInfo(aggregator)
-            );
+        if (uint160(aggregator) != SIG_VALIDATION_SUCCESS && uint160(aggregator) != SIG_VALIDATION_FAILED) {
+            aggregatorInfo = AggregatorStakeInfo(aggregator, _getStakeInfo(aggregator));
         }
-        return
-            ValidationResult(
-                returnInfo,
-                senderInfo,
-                factoryInfo,
-                paymasterInfo,
-                aggregatorInfo
-            );
+        return ValidationResult(returnInfo, senderInfo, factoryInfo, paymasterInfo, aggregatorInfo);
     }
 
-    function simulateValidationBulk(
-        PackedUserOperation[] calldata userOps
-    ) public returns (ValidationResult[] memory) {
-        ValidationResult[] memory results = new ValidationResult[](
-            userOps.length
-        );
+    function simulateValidationBulk(PackedUserOperation[] calldata userOps)
+        public
+        returns (ValidationResult[] memory)
+    {
+        ValidationResult[] memory results = new ValidationResult[](userOps.length);
 
         for (uint256 i = 0; i < userOps.length; i++) {
             ValidationResult memory result = simulateValidation(userOps[i]);
@@ -132,125 +98,141 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         return results;
     }
 
-    function simulateValidationLast(
-        PackedUserOperation[] calldata userOps
-    ) external returns (ValidationResult memory) {
+    function simulateValidationLast(PackedUserOperation[] calldata userOps)
+        external
+        returns (ValidationResult memory)
+    {
         ValidationResult[] memory results = simulateValidationBulk(userOps);
 
         return results[userOps.length - 1];
     }
 
+    function simulateCallAndRevert(address target, bytes calldata data) external {
+        (bool success, bytes memory result) = target.call(data);
+    }
+
+    // Helper function to perform the simulation and capture results from revert bytes.
+    function simulateCall(address entryPoint, address target, bytes calldata data)
+        external
+        returns (bool success, bytes memory result)
+    {
+        bytes memory payload = abi.encodeWithSelector(this.simulateCallAndRevert.selector, target, data);
+        try EP(payable(entryPoint)).delegateAndRevert(address(thisContract), payload) {}
+        catch (bytes memory reason) {
+            bytes memory reasonData = new bytes(reason.length - 4);
+            for (uint256 i = 4; i < reason.length; i++) {
+                reasonData[i - 4] = reason[i];
+            }
+            (success, result) = abi.decode(reasonData, (bool, bytes));
+        }
+    }
+
+    /* 
+    * Helper function to estimate the call gas limit for a given userOperation.
+    * The userOperation's callGasLimit is found by performing a onchain binary search.
+    *
+    * @param queuedUserOps - The userOperations that should be simulated before the targetUserOperation.
+    * @param targetUserOp - The userOperation to simulate. 
+    * @param entryPoint - The address of the entryPoint contract.
+    * @param toleranceDelta - The maximum difference between the estimated gas and the actual gas.
+    * @param initialMinGas - The initial gas value to start the binary search with.
+    * @param gasAllowance - The margin to add to the binary search to account for overhead.
+    * @return optimalGas - The estimated gas limit for the call.
+    */
     function simulateCallData(
-        PackedUserOperation calldata op,
-        address target,
-        bytes calldata targetCallData
+        CallSimulationArgs[] calldata queuedUserOps,
+        CallSimulationArgs calldata targetUserOp,
+        address entryPoint,
+        uint256 initialMinGas,
+        uint256 toleranceDelta,
+        uint256 gasAllowance
     ) public returns (TargetCallResult memory) {
+        // Run all queued userOps to ensure that state is valid for the target userOp.
+        for (uint256 i = 0; i < queuedUserOps.length; i++) {
+            UserOpInfo memory queuedOpInfo;
+            CallSimulationArgs calldata args = queuedUserOps[i];
+            _simulationOnlyValidations(args.op);
+            _validatePrepayment(0, args.op, queuedOpInfo);
+
+            if (args.target == address(0)) {
+                continue;
+            }
+
+            args.target.call(args.targetCallData);
+        }
+
+        // Extract out the target userOperation info.
+        PackedUserOperation calldata op = targetUserOp.op;
+        address target = targetUserOp.target;
+        bytes memory targetCallData = targetUserOp.targetCallData;
+
+        // Run our target userOperation.
         UserOpInfo memory opInfo;
         _simulationOnlyValidations(op);
         _validatePrepayment(0, op, opInfo);
 
-        bool targetSuccess;
-        bytes memory targetResult;
-        uint256 minGas = 21000;
-        uint256 maxGas = uint128(uint256(op.accountGasLimits));
-        uint256 optimalGas = maxGas;
-        if (target != address(0)) {
-            while (minGas <= maxGas) {
-                uint256 midGas = (minGas + maxGas) / 2;
+        if (target == address(0)) {
+            return TargetCallResult(0, false, new bytes(0));
+        }
 
-                try this.tryCall{gas: midGas}(target, targetCallData) {
-                    // If the call is successful, reduce the maxGas and store this as the candidate
-                    optimalGas = midGas;
-                    maxGas = midGas - 1;
-                } catch {
-                    // If it fails, we need more gas, so increase the minGas
-                    minGas = midGas + 1;
-                }
+        // Find the minGas (reduces number of iterations + checks if the call reverts).
+        uint256 remainingGas = gasleft();
+        (bool targetSuccess, bytes memory targetResult) = thisContract.simulateCall(entryPoint, target, targetCallData);
+        uint256 minGas = remainingGas - gasleft();
+
+        if (initialMinGas > 0) {
+            minGas = initialMinGas;
+        }
+
+        // Set bounds for binary search.
+        uint256 maxGas = minGas + gasAllowance;
+        uint256 optimalGas = maxGas;
+
+        while ((maxGas - minGas) >= toleranceDelta) {
+            // Check that we can do one more run.
+            if (gasleft() < minGas + 250_000) {
+                revert OutOfGas(optimalGas, minGas, maxGas, targetSuccess, targetResult);
+            }
+
+            uint256 midGas = (minGas + maxGas) / 2;
+
+            (bool success,) = thisContract.simulateCall(entryPoint, target, targetCallData);
+
+            if (success) {
+                // If the call is successful, reduce the maxGas and store this as the candidate
+                optimalGas = midGas;
+                maxGas = midGas - 1;
+            } else {
+                // If it fails, we need more gas, so increase the minGas
+                minGas = midGas + 1;
             }
         }
 
         return TargetCallResult(optimalGas, targetSuccess, targetResult);
     }
 
-    error innerCallResult(uint256 remainingGas);
-
-    function tryCall(address target, bytes memory targetCallData) external {
-        // Use a low-level call to the target contract with the specified gas
-        (bool success, ) = target.call(targetCallData);
-
-        // Revert if the call fails
-        require(success, "Target call failed");
-
-        // Otherwise, if successful, the function will exit normally
-    }
-
-    function simulateCallDataBulk(
-        PackedUserOperation[] calldata ops,
-        address[] calldata targets,
-        bytes[] calldata targetCallData
-    ) public returns (TargetCallResult[] memory) {
-        TargetCallResult[] memory results = new TargetCallResult[](ops.length);
-
-        for (uint256 i = 0; i < ops.length; i++) {
-            TargetCallResult memory result = simulateCallData(
-                ops[i],
-                targets[i],
-                targetCallData[i]
-            );
-
-            results[i] = result;
-        }
-
-        return results;
-    }
-
-    function simulateCallDataLast(
-        PackedUserOperation[] calldata ops,
-        address[] calldata targets,
-        bytes[] calldata targetCallData
-    ) external returns (TargetCallResult memory) {
-        TargetCallResult[] memory results = simulateCallDataBulk(
-            ops,
-            targets,
-            targetCallData
-        );
-
-        return results[ops.length - 1];
-    }
-
     /// @inheritdoc IEntryPointSimulations
-    function simulateHandleOp(
-        PackedUserOperation calldata op
-    ) public nonReentrant returns (ExecutionResult memory) {
+    function simulateHandleOp(PackedUserOperation calldata op) public nonReentrant returns (ExecutionResult memory) {
         UserOpInfo memory opInfo;
         _simulationOnlyValidations(op);
-        (
-            uint256 validationData,
-            uint256 paymasterValidationData,
-            uint256 paymasterVerificationGasLimit
-        ) = _validatePrepayment(0, op, opInfo);
+        (uint256 validationData, uint256 paymasterValidationData, uint256 paymasterVerificationGasLimit) =
+            _validatePrepayment(0, op, opInfo);
 
-        (uint256 paid, uint256 paymasterPostOpGasLimit) = _executeUserOp(
-            op,
-            opInfo
+        (uint256 paid, uint256 paymasterPostOpGasLimit) = _executeUserOp(op, opInfo);
+
+        return ExecutionResult(
+            opInfo.preOpGas,
+            paid,
+            validationData,
+            paymasterValidationData,
+            paymasterVerificationGasLimit,
+            paymasterPostOpGasLimit,
+            false,
+            "0x"
         );
-
-        return
-            ExecutionResult(
-                opInfo.preOpGas,
-                paid,
-                validationData,
-                paymasterValidationData,
-                paymasterVerificationGasLimit,
-                paymasterPostOpGasLimit,
-                false,
-                "0x"
-            );
     }
 
-    function simulateHandleOpBulk(
-        PackedUserOperation[] calldata ops
-    ) public returns (ExecutionResult[] memory) {
+    function simulateHandleOpBulk(PackedUserOperation[] calldata ops) public returns (ExecutionResult[] memory) {
         ExecutionResult[] memory results = new ExecutionResult[](ops.length);
 
         for (uint256 i = 0; i < ops.length; i++) {
@@ -262,9 +244,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         return results;
     }
 
-    function simulateHandleOpLast(
-        PackedUserOperation[] calldata ops
-    ) external returns (ExecutionResult memory) {
+    function simulateHandleOpLast(PackedUserOperation[] calldata ops) external returns (ExecutionResult memory) {
         ExecutionResult[] memory results = new ExecutionResult[](ops.length);
 
         results = simulateHandleOpBulk(ops);
@@ -272,17 +252,12 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         return results[ops.length - 1];
     }
 
-    function _simulationOnlyValidations(
-        PackedUserOperation calldata userOp
-    ) internal {
+    function _simulationOnlyValidations(PackedUserOperation calldata userOp) internal {
         //initialize senderCreator(). we can't rely on constructor
         initSenderCreator();
 
-        string memory revertReason = _validateSenderAndPaymaster(
-            userOp.initCode,
-            userOp.sender,
-            userOp.paymasterAndData
-        );
+        string memory revertReason =
+            _validateSenderAndPaymaster(userOp.initCode, userOp.sender, userOp.paymasterAndData);
         // solhint-disable-next-line no-empty-blocks
         if (bytes(revertReason).length != 0) {
             revert FailedOp(0, revertReason);
@@ -296,11 +271,11 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
      * @param sender           - The sender address.
      * @param paymasterAndData - The paymaster address (followed by other params, ignored by this method)
      */
-    function _validateSenderAndPaymaster(
-        bytes calldata initCode,
-        address sender,
-        bytes calldata paymasterAndData
-    ) internal view returns (string memory) {
+    function _validateSenderAndPaymaster(bytes calldata initCode, address sender, bytes calldata paymasterAndData)
+        internal
+        view
+        returns (string memory)
+    {
         if (initCode.length == 0 && sender.code.length == 0) {
             // it would revert anyway. but give a meaningful message
             return ("AA20 account not deployed");
@@ -319,9 +294,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     //make sure depositTo cost is more than normal EntryPoint's cost,
     // to mitigate DoS vector on the bundler
     // empiric test showed that without this wrapper, simulation depositTo costs less..
-    function depositTo(
-        address account
-    ) public payable override(IStakeManager, StakeManager) {
+    function depositTo(address account) public payable override(IStakeManager, StakeManager) {
         unchecked {
             // silly code, to waste some gas to make sure depositTo is always little more
             // expensive than on-chain call
