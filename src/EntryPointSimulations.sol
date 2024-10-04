@@ -227,6 +227,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         PackedUserOperation[] calldata ops
     ) public returns (ExecutionResult[] memory) {
         ExecutionResult[] memory results = new ExecutionResult[](ops.length);
+        uint256 resultsIndex = 0;
 
         for (uint256 i = 0; i < ops.length; i++) {
             (bool success, bytes memory returnData) = address(this).call(
@@ -241,7 +242,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
                     returnData,
                     (ExecutionResult)
                 );
-                results.push(execResult);
+                results[resultsIndex++] = execResult;
             }
 
             // revert only at last as we are estimating only the last call
