@@ -10,6 +10,12 @@ import {UserOperationLib} from "account-abstraction/core/UserOperationLib.sol";
 import {IEntryPoint as EP} from "account-abstraction/interfaces/IEntryPoint.sol";
 import {console} from "forge-std/console.sol";
 
+struct SimulationArgs {
+    PackedUserOperation op;
+    address target;
+    bytes targetCallData;
+}
+
 /*
  * This contract inherits the EntryPoint and extends it with the view-only methods that are executed by
  * the bundler in order to check UserOperation validity and estimate its gas consumption.
@@ -20,14 +26,8 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     AggregatorStakeInfo private NOT_AGGREGATED = AggregatorStakeInfo(address(0), StakeInfo(0, 0));
     SenderCreator private _senderCreator;
 
-    struct CallSimulationArgs {
-        PackedUserOperation op;
-        address target;
-        bytes targetCallData;
-    }
-
     // Thrown when the binary search fails due hitting the simulation gasLimit.
-    error OutOfGas(uint256 optimalGas, uint256 minGas, uint256 maxGas, bool success, bytes result);
+    error OutOfGas(uint256 optimalGas, uint256 minGas, uint256 maxGas);
     error innerCallResult(uint256 remainingGas);
 
     function initSenderCreator() internal virtual {
@@ -107,16 +107,24 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         return results[userOps.length - 1];
     }
 
-    function simulateCallAndRevert(address target, bytes calldata data) external {
-        (bool success, bytes memory result) = target.call(data);
+    function simulateCallAndRevert(address target, bytes calldata data, uint256 gas) external {
+        console.log("trying with gas ", gas);
+        (bool success, bytes memory responose) = target.call{gas: gas}(data);
+        if (!success) {
+            assembly {
+                let revertStringLength := mload(responose)
+                let revertStringPtr := add(responose, 0x20)
+                revert(revertStringPtr, revertStringLength)
+            }
+        }
     }
 
     // Helper function to perform the simulation and capture results from revert bytes.
-    function simulateCall(address entryPoint, address target, bytes calldata data)
+    function simulateCall(address entryPoint, address target, bytes calldata data, uint256 gas)
         external
         returns (bool success, bytes memory result)
     {
-        bytes memory payload = abi.encodeWithSelector(this.simulateCallAndRevert.selector, target, data);
+        bytes memory payload = abi.encodeWithSelector(this.simulateCallAndRevert.selector, target, data, gas);
         try EP(payable(entryPoint)).delegateAndRevert(address(thisContract), payload) {}
         catch (bytes memory reason) {
             bytes memory reasonData = new bytes(reason.length - 4);
@@ -124,6 +132,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
                 reasonData[i - 4] = reason[i];
             }
             (success, result) = abi.decode(reasonData, (bool, bytes));
+            console.log("success: ", success);
         }
     }
 
@@ -140,8 +149,8 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     * @return optimalGas - The estimated gas limit for the call.
     */
     function simulateCallData(
-        CallSimulationArgs[] calldata queuedUserOps,
-        CallSimulationArgs calldata targetUserOp,
+        SimulationArgs[] calldata queuedUserOps,
+        SimulationArgs calldata targetUserOp,
         address entryPoint,
         uint256 initialMinGas,
         uint256 toleranceDelta,
@@ -150,7 +159,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         // Run all queued userOps to ensure that state is valid for the target userOp.
         for (uint256 i = 0; i < queuedUserOps.length; i++) {
             UserOpInfo memory queuedOpInfo;
-            CallSimulationArgs calldata args = queuedUserOps[i];
+            SimulationArgs calldata args = queuedUserOps[i];
             _simulationOnlyValidations(args.op);
             _validatePrepayment(0, args.op, queuedOpInfo);
 
@@ -175,13 +184,19 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
             return TargetCallResult(0, false, new bytes(0));
         }
 
-        // Find the minGas (reduces number of iterations + checks if the call reverts).
-        uint256 remainingGas = gasleft();
-        (bool targetSuccess, bytes memory targetResult) = thisContract.simulateCall(entryPoint, target, targetCallData);
-        uint256 minGas = remainingGas - gasleft();
+        uint256 minGas;
+        bool targetSuccess;
+        bytes memory targetResult;
 
         if (initialMinGas > 0) {
+            targetSuccess = true;
+            targetResult = hex"";
             minGas = initialMinGas;
+        } else {
+            // Find the minGas (reduces number of iterations + checks if the call reverts).
+            uint256 remainingGas = gasleft();
+            (targetSuccess, targetResult) = thisContract.simulateCall(entryPoint, target, targetCallData, gasleft());
+            minGas = remainingGas - gasleft();
         }
 
         // Set bounds for binary search.
@@ -190,18 +205,21 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
 
         while ((maxGas - minGas) >= toleranceDelta) {
             // Check that we can do one more run.
-            if (gasleft() < minGas + 250_000) {
-                revert OutOfGas(optimalGas, minGas, maxGas, targetSuccess, targetResult);
+            if (gasleft() < minGas + 1_000) {
+                revert OutOfGas(optimalGas, minGas, maxGas);
             }
 
             uint256 midGas = (minGas + maxGas) / 2;
+            console.log("checking new iteration: ", midGas);
 
-            (bool success,) = thisContract.simulateCall(entryPoint, target, targetCallData);
+            (bool success, bytes memory result) = thisContract.simulateCall(entryPoint, target, targetCallData, midGas);
 
             if (success) {
                 // If the call is successful, reduce the maxGas and store this as the candidate
                 optimalGas = midGas;
+                console.log("success, new optimalGas", optimalGas);
                 maxGas = midGas - 1;
+                targetResult = result;
             } else {
                 // If it fails, we need more gas, so increase the minGas
                 minGas = midGas + 1;
