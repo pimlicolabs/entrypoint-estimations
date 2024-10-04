@@ -82,9 +82,9 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         return ValidationResult(returnInfo, senderInfo, factoryInfo, paymasterInfo, aggregatorInfo);
     }
 
-    function simulateValidationLast(PackedUserOperation[] calldata userOps)
-        external
-        returns (ValidationResult memory)
+    function simulateValidationBulk(PackedUserOperation[] calldata userOps)
+        public
+        returns (ValidationResult[] memory)
     {
         ValidationResult[] memory results = new ValidationResult[](userOps.length);
 
@@ -93,6 +93,15 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
 
             results[i] = result;
         }
+
+        return results;
+    }
+
+    function simulateValidationLast(PackedUserOperation[] calldata userOps)
+        external
+        returns (ValidationResult memory)
+    {
+        ValidationResult[] memory results = simulateValidationBulk(userOps);
 
         return results[userOps.length - 1];
     }
@@ -236,11 +245,33 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
 
     function simulateHandleOpBulk(PackedUserOperation[] calldata ops) public returns (ExecutionResult[] memory) {
         ExecutionResult[] memory results = new ExecutionResult[](ops.length);
+        uint256 resultsIndex = 0;
 
         for (uint256 i = 0; i < ops.length; i++) {
-            ExecutionResult memory result = simulateHandleOp(ops[i]);
+            (bool success, bytes memory returnData) = address(this).call(
+                abi.encodeWithSignature(
+                    "simulateHandleOp((address,uint256,bytes,bytes,uint256,uint256,uint256,uint256,uint256,address,address,bytes))",
+                    ops[i]
+                )
+            );
 
-            results[i] = result;
+            if (success) {
+                ExecutionResult memory execResult = abi.decode(returnData, (ExecutionResult));
+                results[resultsIndex++] = execResult;
+            }
+
+            // revert only at last as we are estimating only the last call
+            if (i == ops.length - 1) {
+                if (returnData.length > 0) {
+                    assembly {
+                        // Revert using the original error data, propagating the exact revert reason
+                        revert(add(returnData, 0x20), mload(returnData))
+                    }
+                } else {
+                    // If there's no revert reason, we can use a generic message
+                    revert("simulateHandleOp failed without a revert reason");
+                }
+            }
         }
 
         return results;
