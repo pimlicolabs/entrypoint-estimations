@@ -245,33 +245,11 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
 
     function simulateHandleOpBulk(PackedUserOperation[] calldata ops) public returns (ExecutionResult[] memory) {
         ExecutionResult[] memory results = new ExecutionResult[](ops.length);
-        uint256 resultsIndex = 0;
 
         for (uint256 i = 0; i < ops.length; i++) {
-            (bool success, bytes memory returnData) = address(this).call(
-                abi.encodeWithSignature(
-                    "simulateHandleOp((address,uint256,bytes,bytes,uint256,uint256,uint256,uint256,uint256,address,address,bytes))",
-                    ops[i]
-                )
-            );
+            ExecutionResult memory result = simulateHandleOp(ops[i]);
 
-            if (success) {
-                ExecutionResult memory execResult = abi.decode(returnData, (ExecutionResult));
-                results[resultsIndex++] = execResult;
-            }
-
-            // revert only at last as we are estimating only the last call
-            if (i == ops.length - 1) {
-                if (returnData.length > 0 && !success) {
-                    assembly {
-                        // Revert using the original error data, propagating the exact revert reason
-                        revert(add(returnData, 0x20), mload(returnData))
-                    }
-                } else {
-                    // If there's no revert reason, we can use a generic message
-                    revert("simulateHandleOp failed without a revert reason");
-                }
-            }
+            results[i] = result;
         }
 
         return results;
