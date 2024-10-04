@@ -262,7 +262,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
 
             // revert only at last as we are estimating only the last call
             if (i == ops.length - 1) {
-                if (returnData.length > 0) {
+                if (returnData.length > 0 && !success) {
                     assembly {
                         // Revert using the original error data, propagating the exact revert reason
                         revert(add(returnData, 0x20), mload(returnData))
