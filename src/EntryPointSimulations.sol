@@ -8,7 +8,6 @@ import "./EntryPoint.sol";
 import "./IEntryPointSimulations.sol";
 import {UserOperationLib} from "account-abstraction/core/UserOperationLib.sol";
 import {IEntryPoint as EP} from "account-abstraction/interfaces/IEntryPoint.sol";
-import {console} from "forge-std/console.sol";
 
 struct SimulationArgs {
     PackedUserOperation op;
@@ -27,7 +26,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     SenderCreator private _senderCreator;
 
     // Thrown when the binary search fails due hitting the simulation gasLimit.
-    error OutOfGas(uint256 optimalGas, uint256 minGas, uint256 maxGas);
+    error SimulationOutOfGas(uint256 optimalGas, uint256 minGas, uint256 maxGas);
     error innerCallResult(uint256 remainingGas);
 
     function initSenderCreator() internal virtual {
@@ -83,9 +82,9 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         return ValidationResult(returnInfo, senderInfo, factoryInfo, paymasterInfo, aggregatorInfo);
     }
 
-    function simulateValidationBulk(PackedUserOperation[] calldata userOps)
-        public
-        returns (ValidationResult[] memory)
+    function simulateValidationLast(PackedUserOperation[] calldata userOps)
+        external
+        returns (ValidationResult memory)
     {
         ValidationResult[] memory results = new ValidationResult[](userOps.length);
 
@@ -95,26 +94,14 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
             results[i] = result;
         }
 
-        return results;
-    }
-
-    function simulateValidationLast(PackedUserOperation[] calldata userOps)
-        external
-        returns (ValidationResult memory)
-    {
-        ValidationResult[] memory results = simulateValidationBulk(userOps);
-
         return results[userOps.length - 1];
     }
 
     function simulateCallAndRevert(address target, bytes calldata data, uint256 gas) external {
-        console.log("trying with gas ", gas);
-        (bool success, bytes memory responose) = target.call{gas: gas}(data);
+        (bool success, bytes memory returnData) = target.call{gas: gas}(data);
         if (!success) {
             assembly {
-                let revertStringLength := mload(responose)
-                let revertStringPtr := add(responose, 0x20)
-                revert(revertStringPtr, revertStringLength)
+                revert(add(returnData, 32), returnData)
             }
         }
     }
@@ -132,7 +119,6 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
                 reasonData[i - 4] = reason[i];
             }
             (success, result) = abi.decode(reasonData, (bool, bytes));
-            console.log("success: ", success);
         }
     }
 
@@ -205,19 +191,17 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
 
         while ((maxGas - minGas) >= toleranceDelta) {
             // Check that we can do one more run.
-            if (gasleft() < minGas + 1_000) {
-                revert OutOfGas(optimalGas, minGas, maxGas);
+            if (gasleft() < minGas + 5_000) {
+                revert SimulationOutOfGas(optimalGas, minGas, maxGas);
             }
 
             uint256 midGas = (minGas + maxGas) / 2;
-            console.log("checking new iteration: ", midGas);
 
             (bool success, bytes memory result) = thisContract.simulateCall(entryPoint, target, targetCallData, midGas);
 
             if (success) {
                 // If the call is successful, reduce the maxGas and store this as the candidate
                 optimalGas = midGas;
-                console.log("success, new optimalGas", optimalGas);
                 maxGas = midGas - 1;
                 targetResult = result;
             } else {
