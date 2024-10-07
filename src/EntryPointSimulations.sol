@@ -109,8 +109,9 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     function simulateCallAndRevert(address target, bytes calldata data, uint256 gas) external {
         (bool success, bytes memory returnData) = target.call{gas: gas}(data);
         if (!success) {
+            if (returnData.length == 0) revert();
             assembly {
-                revert(add(returnData, 32), returnData)
+                revert(add(32, returnData), mload(returnData))
             }
         }
     }
@@ -131,12 +132,12 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         }
     }
 
-    /* 
+    /*
     * Helper function to estimate the call gas limit for a given userOperation.
     * The userOperation's callGasLimit is found by performing a onchain binary search.
     *
     * @param queuedUserOps - The userOperations that should be simulated before the targetUserOperation.
-    * @param targetUserOp - The userOperation to simulate. 
+    * @param targetUserOp - The userOperation to simulate.
     * @param entryPoint - The address of the entryPoint contract.
     * @param toleranceDelta - The maximum difference between the estimated gas and the actual gas.
     * @param initialMinGas - The initial gas value to start the binary search with.
