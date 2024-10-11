@@ -22,6 +22,8 @@ import "account-abstraction-v6/core/NonceManager.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+// THIS IS A MODIFIED VERSION OF account-abstraction-v6/core/EntryPoint.sol.
+// THIS CONTRACT IS MEANT TO BE USED AS A CODE OVERRIDE DURING ETH_ESTIMATEGAS SIMULATIONS.
 contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard {
     using UserOperationLib for UserOperation;
 
