@@ -24,10 +24,13 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 // THIS IS A MODIFIED VERSION OF account-abstraction-v6/core/EntryPoint.sol.
 // THIS CONTRACT IS MEANT TO BE USED AS A CODE OVERRIDE DURING ETH_ESTIMATEGAS SIMULATIONS.
-contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard {
+// Changes:
+// - Remove reentrancy guard
+// - Hardcode senderCreator
+// - Renamed to EntryPointCodeOverride
+// - Throw custom error CallPhaseReverted if callphase reverts
+contract EntryPointCodeOverride is IEntryPoint, StakeManager, NonceManager {
     using UserOperationLib for UserOperation;
-
-    SenderCreator private immutable senderCreator = new SenderCreator();
 
     // internal value used during simulation: need to query aggregator.
     address private constant SIMULATE_FIND_AGGREGATOR = address(1);
@@ -67,7 +70,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
         private
         returns (uint256 collected)
     {
-        uint256 preGas = gasleft();
+        //uint256 preGas = gasleft(); // unused
         bytes memory context = getMemoryBytesFromOffset(opInfo.contextOffset);
 
         try this.innerHandleOp(userOp.callData, opInfo, context) returns (uint256 _actualGasCost) {
@@ -86,7 +89,9 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
                 revert FailedOp(opIndex, "AA95 out of gas");
             }
 
+            // ================================================================= //
             // ======= START: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
+            // ================================================================= //
             if (reason.length == 0) revert CallPhaseReverted("");
 
             assembly {
@@ -97,7 +102,9 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
             //uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
             //collected = _handlePostOp(opIndex, IPaymaster.PostOpMode.postOpReverted, opInfo, context, actualGas);
 
-            // ======= END: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
+            // ================================================================= //
+            // ======= END: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ========= //
+            // ================================================================= //
         }
     }
 
@@ -109,7 +116,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      * @param ops the operations to execute
      * @param beneficiary the address to receive the fees
      */
-    function handleOps(UserOperation[] calldata ops, address payable beneficiary) public nonReentrant {
+    function handleOps(UserOperation[] calldata ops, address payable beneficiary) public {
         uint256 opslen = ops.length;
         UserOpInfo[] memory opInfos = new UserOpInfo[](opslen);
 
@@ -138,7 +145,6 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      */
     function handleAggregatedOps(UserOpsPerAggregator[] calldata opsPerAggregator, address payable beneficiary)
         public
-        nonReentrant
     {
         uint256 opasLen = opsPerAggregator.length;
         uint256 totalOps = 0;
@@ -271,7 +277,10 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
             if (!success) {
                 bytes memory result = Exec.getReturnData(REVERT_REASON_MAX_LEN);
 
+                // ================================================================= //
                 // ======= START: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
+                // ================================================================= //
+
                 revert CallPhaseReverted(result);
 
                 //if (result.length > 0) {
@@ -279,7 +288,9 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
                 //}
                 //mode = IPaymaster.PostOpMode.opReverted;
 
-                // ======= END: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
+                // ================================================================= //
+                // ======= END: THIS IS CUSTOM TO THIS SIMULATION CONTRACT  ======== //
+                // ================================================================= //
             }
         }
 
@@ -373,7 +384,9 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
         if (initCode.length != 0) {
             address sender = opInfo.mUserOp.sender;
             if (sender.code.length != 0) revert FailedOp(opIndex, "AA10 sender already constructed");
-            address sender1 = senderCreator.createSender{gas: opInfo.mUserOp.verificationGasLimit}(initCode);
+            address sender1 = SenderCreator(0x7fc98430eAEdbb6070B35B39D798725049088348).createSender{
+                gas: opInfo.mUserOp.verificationGasLimit
+            }(initCode);
             if (sender1 == address(0)) revert FailedOp(opIndex, "AA13 initCode failed or OOG");
             if (sender1 != sender) revert FailedOp(opIndex, "AA14 initCode must return sender");
             if (sender1.code.length == 0) revert FailedOp(opIndex, "AA15 initCode must create sender");
@@ -389,7 +402,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      * @param initCode the constructor code to be passed into the UserOperation.
      */
     function getSenderAddress(bytes calldata initCode) public {
-        address sender = senderCreator.createSender(initCode);
+        address sender = SenderCreator(0x7fc98430eAEdbb6070B35B39D798725049088348).createSender(initCode);
         revert SenderAddressResult(sender);
     }
 
