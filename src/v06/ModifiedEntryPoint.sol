@@ -25,11 +25,10 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 // THIS IS A MODIFIED VERSION OF account-abstraction-v6/core/EntryPoint.sol.
 // THIS CONTRACT IS MEANT TO BE USED AS A CODE OVERRIDE DURING ETH_ESTIMATEGAS SIMULATIONS.
 // Changes:
-// - Remove reentrancy guard
 // - Hardcode senderCreator
 // - Renamed to EntryPointCodeOverride
 // - Throw custom error CallPhaseReverted if callphase reverts
-contract EntryPointCodeOverride is IEntryPoint, StakeManager, NonceManager {
+contract EntryPointCodeOverride is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard {
     using UserOperationLib for UserOperation;
 
     // internal value used during simulation: need to query aggregator.
