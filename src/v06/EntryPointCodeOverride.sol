@@ -45,7 +45,14 @@ contract EntryPointCodeOverride is IEntryPoint, StakeManager, NonceManager, Reen
      */
     uint256 public constant SIG_VALIDATION_FAILED = 1;
 
+    // ================================================================= //
+    // ======= START: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
+    // ================================================================= //
     error CallPhaseReverted(bytes reason);
+    error FailedOpWithRevert(uint256 opIndex, string reason, bytes inner);
+    // ================================================================= //
+    // ======= END: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ========= //
+    // ================================================================= //
 
     /**
      * compensate the caller's beneficiary address with the collected fees of all UserOperations.
@@ -648,7 +655,21 @@ contract EntryPointCodeOverride is IEntryPoint, StakeManager, NonceManager, Reen
                 if (context.length > 0) {
                     actualGasCost = actualGas * gasPrice;
                     if (mode != IPaymaster.PostOpMode.postOpReverted) {
-                        IPaymaster(paymaster).postOp{gas: mUserOp.verificationGasLimit}(mode, context, actualGasCost);
+                        // ================================================================= //
+                        // ======= START: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
+                        // ================================================================= //
+
+                        // Throw postOp revert error if one is thrown.
+                        try IPaymaster(paymaster).postOp{gas: mUserOp.verificationGasLimit}(
+                            mode, context, actualGasCost
+                        ) {} catch (bytes memory reason) {
+                            if (reason.length == 0) revert FailedOp(opIndex, "AA50 postOp revert");
+                            revert FailedOpWithRevert(opIndex, "AA50 postOp reverted", reason);
+                        }
+
+                        // ================================================================= //
+                        // ======= END: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ========= //
+                        // ================================================================= //
                     } else {
                         // solhint-disable-next-line no-empty-blocks
                         try IPaymaster(paymaster).postOp{gas: mUserOp.verificationGasLimit}(
