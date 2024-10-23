@@ -719,22 +719,25 @@ contract EntryPoint is
                         {
 
                         } catch {
-                            emit PostOpRevertReason(
-                                opInfo.userOpHash,
-                                opInfo.mUserOp.sender,
-                                opInfo.mUserOp.nonce,
-                                Exec.getReturnData(REVERT_REASON_MAX_LEN)
+                            revert FailedOpWithRevert(
+                                0, "AA50 postOp reverted", Exec.getReturnData(REVERT_REASON_MAX_LEN)
                             );
-                            actualGas = preGas - gasleft() + opInfo.preOpGas;
-                            (
-                                actualGasCost,
-                                paymasterPostOpGasLimit
-                            ) = _postExecution(
-                                IPaymaster.PostOpMode.postOpReverted,
-                                opInfo,
-                                context,
-                                actualGas
-                            );
+                            //emit PostOpRevertReason(
+                            //    opInfo.userOpHash,
+                            //    opInfo.mUserOp.sender,
+                            //    opInfo.mUserOp.nonce,
+                            //    Exec.getReturnData(REVERT_REASON_MAX_LEN)
+                            //);
+                            //actualGas = preGas - gasleft() + opInfo.preOpGas;
+                            //(
+                            //    actualGasCost,
+                            //    paymasterPostOpGasLimit
+                            //) = _postExecution(
+                            //    IPaymaster.PostOpMode.postOpReverted,
+                            //    opInfo,
+                            //    context,
+                            //    actualGas
+                            //);
                         }
                         paymasterPostOpGasLimit = remainingGas - gasleft();
                     }
