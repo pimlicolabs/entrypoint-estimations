@@ -98,6 +98,8 @@ contract EntryPointCodeOverride is IEntryPoint, StakeManager, NonceManager, Reen
             // ================================================================= //
             // ======= START: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
             // ================================================================= //
+            // note: revert whole tx if CallPhaseReverted is detected.
+
             if (reason.length == 0) revert CallPhaseReverted("");
 
             assembly {
@@ -266,26 +268,46 @@ contract EntryPointCodeOverride is IEntryPoint, StakeManager, NonceManager, Reen
         require(msg.sender == address(this), "AA92 internal call only");
         MemoryUserOp memory mUserOp = opInfo.mUserOp;
 
-        uint256 callGasLimit = mUserOp.callGasLimit;
-        unchecked {
-            // handleOps was called with gas limit too low. abort entire bundle.
-            if (gasleft() < callGasLimit + mUserOp.verificationGasLimit + 5000) {
-                assembly {
-                    mstore(0, INNER_OUT_OF_GAS)
-                    revert(0, 32)
-                }
-            }
-        }
+        // ================================================================= //
+        // ======= START: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
+        // ================================================================= //
+        // note: ignoring AA95 check
+
+        //uint256 callGasLimit = mUserOp.callGasLimit;
+        //
+        //unchecked {
+        //    // handleOps was called with gas limit too low. abort entire bundle.
+        //    if (gasleft() < callGasLimit + mUserOp.verificationGasLimit + 5000) {
+        //        assembly {
+        //            mstore(0, INNER_OUT_OF_GAS)
+        //            revert(0, 32)
+        //        }
+        //    }
+        //}
+
+        // ================================================================= //
+        // ======= END: THIS IS CUSTOM TO THIS SIMULATION CONTRACT  ======== //
+        // ================================================================= //
 
         IPaymaster.PostOpMode mode = IPaymaster.PostOpMode.opSucceeded;
         if (callData.length > 0) {
-            bool success = Exec.call(mUserOp.sender, 0, callData, callGasLimit);
+            // ================================================================= //
+            // ======= START: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
+            // ================================================================= //
+            // note: Calling exec with gasleft() to ensure that the call has sufficient gas to execute
+
+            bool success = Exec.call(mUserOp.sender, 0, callData, gasleft());
+
+            // ================================================================= //
+            // ======= END: THIS IS CUSTOM TO THIS SIMULATION CONTRACT  ======== //
+            // ================================================================= //
             if (!success) {
                 bytes memory result = Exec.getReturnData(REVERT_REASON_MAX_LEN);
 
                 // ================================================================= //
                 // ======= START: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
                 // ================================================================= //
+                // note: Revert if the call failed (this will be caught higher up)
 
                 revert CallPhaseReverted(result);
 
@@ -658,8 +680,8 @@ contract EntryPointCodeOverride is IEntryPoint, StakeManager, NonceManager, Reen
                         // ================================================================= //
                         // ======= START: THIS IS CUSTOM TO THIS SIMULATION CONTRACT ======= //
                         // ================================================================= //
+                        // note: Throws postOp revert error if one is thrown.
 
-                        // Throw postOp revert error if one is thrown.
                         try IPaymaster(paymaster).postOp{gas: mUserOp.verificationGasLimit}(
                             mode, context, actualGasCost
                         ) {} catch (bytes memory reason) {
