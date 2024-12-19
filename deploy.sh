@@ -26,11 +26,11 @@ for pair in "${pairs[@]}"; do
   if [[ -n "$ETHERSCAN_KEY" && -n "$ETHERSCAN_URL" ]]; then
     echo "Verifying with $ETHERSCAN_URL using key $ETHERSCAN_KEY"
 
-    forge verify-contract 0xcB3a51ac0e58D90113a6AD6528044502E8bD0603 src/v07/PimlicoEntryPointSimulations.sol:PimlicoEntryPointSimulations \
+    forge verify-contract 0x9490e67bE2d824dF02a404e039221EfD432E9115 src/v07/PimlicoEntryPointSimulations.sol:PimlicoEntryPointSimulations \
       --verifier-url "$ETHERSCAN_URL" \
       --etherscan-api-key "$ETHERSCAN_KEY"
 
-    forge verify-contract 0x29c2Fc1B479f92B7Bb1CA30Ed7A8EEF15223a7c4 src/v07/EntryPointSimulations.sol:EntryPointSimulations \
+    forge verify-contract 0x35787Fb1662eA9Ee458ca74b768c5E209Cbe85C2 src/v07/EntryPointSimulations.sol:EntryPointSimulations \
       --verifier-url "$ETHERSCAN_URL" \
       --etherscan-api-key "$ETHERSCAN_KEY"
 

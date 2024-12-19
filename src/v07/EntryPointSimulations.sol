@@ -169,18 +169,11 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     // Helper function to perform the simulation and capture results from revert bytes.
     function simulateCall(
         address entryPoint,
-        address target,
-        bytes calldata data,
+        bytes calldata payload,
         uint256 gas
     ) external returns (bool success, bytes memory result) {
-        bytes memory payload = abi.encodeWithSelector(
-            this.simulateCallAndRevert.selector,
-            target,
-            data,
-            gas
-        );
         try
-            EP(payable(entryPoint)).delegateAndRevert(
+            EP(payable(entryPoint)).delegateAndRevert{gas: gas}(
                 address(thisContract),
                 payload
             )
@@ -193,7 +186,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         }
     }
 
-    function simulateVerificationCallData(
+    function binarySearchPaymasterVerificationGasLimit(
         SimulationArgs[] calldata queuedUserOps,
         SimulationArgs calldata targetUserOp,
         address entryPoint,
@@ -222,17 +215,16 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         UserOpInfo memory opInfo;
         _simulationOnlyValidations(op);
 
-        address target = address(thisContract);
-        bytes memory targetCallData = abi.encodeWithSelector(
-            this._validatePrepayment.selector,
+        uint256 minGas;
+        bool targetSuccess;
+        bytes memory targetResult;
+
+        bytes memory payload = abi.encodeWithSelector(
+            this._paymasterValidation.selector,
             0,
             op,
             opInfo
         );
-
-        uint256 minGas;
-        bool targetSuccess;
-        bytes memory targetResult;
 
         if (initialMinGas > 0) {
             targetSuccess = true;
@@ -241,10 +233,10 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         } else {
             // Find the minGas (reduces number of iterations + checks if the call reverts).
             uint256 remainingGas = gasleft();
+
             (targetSuccess, targetResult) = thisContract.simulateCall(
                 entryPoint,
-                target,
-                targetCallData,
+                payload,
                 gasleft()
             );
             minGas = remainingGas - gasleft();
@@ -268,8 +260,99 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
 
             (bool success, bytes memory result) = thisContract.simulateCall(
                 entryPoint,
-                target,
-                targetCallData,
+                payload,
+                midGas
+            );
+
+            if (success) {
+                // If the call is successful, reduce the maxGas and store this as the candidate
+                optimalGas = midGas;
+                maxGas = midGas - 1;
+                targetResult = result;
+            } else {
+                // If it fails, we need more gas, so increase the minGas
+                minGas = midGas + 1;
+            }
+        }
+
+        return TargetCallResult(optimalGas, targetSuccess, targetResult);
+    }
+
+    function binarySearchVerificationGasLimit(
+        SimulationArgs[] calldata queuedUserOps,
+        SimulationArgs calldata targetUserOp,
+        address entryPoint,
+        uint256 initialMinGas,
+        uint256 toleranceDelta,
+        uint256 gasAllowance
+    ) public returns (TargetCallResult memory) {
+        // Run all queued userOps to ensure that state is valid for the target userOp.
+        for (uint256 i = 0; i < queuedUserOps.length; i++) {
+            UserOpInfo memory queuedOpInfo;
+            SimulationArgs calldata args = queuedUserOps[i];
+            _simulationOnlyValidations(args.op);
+            _validatePrepayment(0, args.op, queuedOpInfo);
+
+            if (args.target == address(0)) {
+                continue;
+            }
+
+            args.target.call(args.targetCallData);
+        }
+
+        // Extract out the target userOperation info.
+        PackedUserOperation calldata op = targetUserOp.op;
+
+        // Run our target userOperation.
+        UserOpInfo memory opInfo;
+        _simulationOnlyValidations(op);
+
+        uint256 minGas;
+        bool targetSuccess;
+        bytes memory targetResult;
+
+        bytes memory payload = abi.encodeWithSelector(
+            this._accountValidation.selector,
+            0,
+            op,
+            opInfo
+        );
+
+        if (initialMinGas > 0) {
+            targetSuccess = true;
+            targetResult = hex"";
+            minGas = initialMinGas;
+        } else {
+            // Find the minGas (reduces number of iterations + checks if the call reverts).
+            uint256 remainingGas = gasleft();
+
+            (targetSuccess, targetResult) = thisContract.simulateCall(
+                entryPoint,
+                payload,
+                gasleft()
+            );
+            minGas = remainingGas - gasleft();
+
+            // If the call reverts then don't binary search.
+            if (!targetSuccess) {
+                return TargetCallResult(0, targetSuccess, targetResult);
+            }
+        }
+
+        uint256 maxGas = minGas + gasAllowance;
+        uint256 optimalGas = maxGas;
+
+        while ((maxGas - minGas) >= toleranceDelta) {
+            // Check that we can do one more run.
+            if (gasleft() < minGas + 5_000) {
+                revert SimulationOutOfGas(optimalGas, minGas, maxGas);
+            }
+
+            uint256 midGas = (minGas + maxGas) / 2;
+
+            (bool success, bytes memory result) = thisContract.simulateCall(
+                entryPoint,
+                payload,
                 midGas
             );
 
@@ -346,10 +429,15 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         } else {
             // Find the minGas (reduces number of iterations + checks if the call reverts).
             uint256 remainingGas = gasleft();
-            (targetSuccess, targetResult) = thisContract.simulateCall(
-                entryPoint,
+            bytes memory payload = abi.encodeWithSelector(
+                this.simulateCallAndRevert.selector,
                 target,
                 targetCallData,
+                gasleft()
+            );
+            (targetSuccess, targetResult) = thisContract.simulateCall(
+                entryPoint,
+                payload,
                 gasleft()
             );
             minGas = remainingGas - gasleft();
@@ -372,11 +460,16 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
 
             uint256 midGas = (minGas + maxGas) / 2;
 
-            (bool success, bytes memory result) = thisContract.simulateCall(
-                entryPoint,
+            bytes memory payload = abi.encodeWithSelector(
+                this.simulateCallAndRevert.selector,
                 target,
                 targetCallData,
                 midGas
+            );
+            (bool success, bytes memory result) = thisContract.simulateCall(
+                entryPoint,
+                payload,
+                gasleft()
             );
 
             if (success) {
