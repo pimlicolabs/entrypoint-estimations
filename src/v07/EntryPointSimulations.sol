@@ -52,8 +52,10 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         UserOpInfo memory outOpInfo;
 
         _simulationOnlyValidations(userOp);
-        (uint256 validationData, uint256 paymasterValidationData,) = // uint256 paymasterVerificationGasLimit
-         _validatePrepayment(0, userOp, outOpInfo);
+        (
+            uint256 validationData,
+            uint256 paymasterValidationData, // uint256 paymasterVerificationGasLimit
+        ) = _validatePrepayment(0, userOp, outOpInfo);
 
         _validateAccountAndPaymasterValidationData(0, validationData, paymasterValidationData, address(0));
 
@@ -117,12 +119,11 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     }
 
     // Helper function to perform the simulation and capture results from revert bytes.
-    function simulateCall(address entryPoint, address target, bytes calldata data, uint256 gas)
+    function simulateCall(address entryPoint, bytes calldata payload, uint256 gas)
         external
         returns (bool success, bytes memory result)
     {
-        bytes memory payload = abi.encodeWithSelector(this.simulateCallAndRevert.selector, target, data, gas);
-        try EP(payable(entryPoint)).delegateAndRevert(address(thisContract), payload) {}
+        try EP(payable(entryPoint)).delegateAndRevert{gas: gas}(address(thisContract), payload) {}
         catch (bytes memory reason) {
             bytes memory reasonData = new bytes(reason.length - 4);
             for (uint256 i = 4; i < reason.length; i++) {
@@ -132,18 +133,128 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         }
     }
 
+    function processQueuedUserOps(SimulationArgs[] calldata queuedUserOps) internal {
+        // Run all queued userOps to ensure that state is valid for the target userOp.
+        for (uint256 i = 0; i < queuedUserOps.length; i++) {
+            UserOpInfo memory queuedOpInfo;
+            SimulationArgs calldata args = queuedUserOps[i];
+            _simulationOnlyValidations(args.op);
+            _validatePrepayment(0, args.op, queuedOpInfo);
+
+            if (args.target == address(0)) {
+                continue;
+            }
+
+            args.target.call(args.targetCallData);
+        }
+    }
+
+    function binarySearchGasLimit(
+        SimulationArgs[] calldata queuedUserOps,
+        SimulationArgs calldata targetUserOp,
+        address entryPoint,
+        uint256 initialMinGas,
+        uint256 toleranceDelta,
+        uint256 gasAllowance,
+        bytes memory payload
+    ) internal returns (TargetCallResult memory) {
+        processQueuedUserOps(queuedUserOps);
+        // Extract out the target userOperation info.
+
+        // Run our target userOperation.
+        _simulationOnlyValidations(targetUserOp.op);
+
+        uint256 minGas;
+        bool targetSuccess;
+        bytes memory targetResult;
+
+        if (initialMinGas > 0) {
+            targetSuccess = true;
+            targetResult = hex"";
+            minGas = initialMinGas;
+        } else {
+            // Find the minGas (reduces number of iterations + checks if the call reverts).
+            uint256 remainingGas = gasleft();
+
+            (targetSuccess, targetResult) = thisContract.simulateCall(entryPoint, payload, gasleft());
+            minGas = remainingGas - gasleft();
+
+            // If the call reverts then don't binary search.
+            if (!targetSuccess) {
+                return TargetCallResult(0, targetSuccess, targetResult);
+            }
+        }
+
+        uint256 maxGas = minGas + gasAllowance;
+        uint256 optimalGas = maxGas;
+
+        while ((maxGas - minGas) >= toleranceDelta) {
+            // Check that we can do one more run.
+            if (gasleft() < minGas + 5_000) {
+                revert SimulationOutOfGas(optimalGas, minGas, maxGas);
+            }
+
+            uint256 midGas = (minGas + maxGas) / 2;
+
+            (bool success, bytes memory result) = thisContract.simulateCall(entryPoint, payload, midGas);
+
+            if (success) {
+                // If the call is successful, reduce the maxGas and store this as the candidate
+                optimalGas = midGas;
+                maxGas = midGas - 1;
+                targetResult = result;
+            } else {
+                // If it fails, we need more gas, so increase the minGas
+                minGas = midGas + 1;
+            }
+        }
+
+        return TargetCallResult(optimalGas, targetSuccess, targetResult);
+    }
+
+    function binarySearchPaymasterVerificationGasLimit(
+        SimulationArgs[] calldata queuedUserOps,
+        SimulationArgs calldata targetUserOp,
+        address entryPoint,
+        uint256 initialMinGas,
+        uint256 toleranceDelta,
+        uint256 gasAllowance
+    ) public returns (TargetCallResult memory) {
+        UserOpInfo memory opInfo;
+        bytes memory payload = abi.encodeWithSelector(this._paymasterValidation.selector, 0, targetUserOp.op, opInfo);
+
+        return binarySearchGasLimit(
+            queuedUserOps, targetUserOp, entryPoint, initialMinGas, toleranceDelta, gasAllowance, payload
+        );
+    }
+
+    function binarySearchVerificationGasLimit(
+        SimulationArgs[] calldata queuedUserOps,
+        SimulationArgs calldata targetUserOp,
+        address entryPoint,
+        uint256 initialMinGas,
+        uint256 toleranceDelta,
+        uint256 gasAllowance
+    ) public returns (TargetCallResult memory) {
+        UserOpInfo memory opInfo;
+        bytes memory payload = abi.encodeWithSelector(this._accountValidation.selector, 0, targetUserOp.op, opInfo);
+        return binarySearchGasLimit(
+            queuedUserOps, targetUserOp, entryPoint, initialMinGas, toleranceDelta, gasAllowance, payload
+        );
+    }
+
     /*
-    * Helper function to estimate the call gas limit for a given userOperation.
-    * The userOperation's callGasLimit is found by performing a onchain binary search.
-    *
-    * @param queuedUserOps - The userOperations that should be simulated before the targetUserOperation.
-    * @param targetUserOp - The userOperation to simulate.
-    * @param entryPoint - The address of the entryPoint contract.
-    * @param toleranceDelta - The maximum difference between the estimated gas and the actual gas.
-    * @param initialMinGas - The initial gas value to start the binary search with.
-    * @param gasAllowance - The margin to add to the binary search to account for overhead.
-    * @return optimalGas - The estimated gas limit for the call.
-    */
+     * Helper function to estimate the call gas limit for a given userOperation.
+     * The userOperation's callGasLimit is found by performing a onchain binary search.
+     *
+     * @param queuedUserOps - The userOperations that should be simulated before the targetUserOperation.
+     * @param targetUserOp - The userOperation to simulate.
+     * @param entryPoint - The address of the entryPoint contract.
+     * @param toleranceDelta - The maximum difference between the estimated gas and the actual gas.
+     * @param initialMinGas - The initial gas value to start the binary search with.
+     * @param gasAllowance - The margin to add to the binary search to account for overhead.
+     * @return optimalGas - The estimated gas limit for the call.
+     */
     function simulateCallData(
         SimulationArgs[] calldata queuedUserOps,
         SimulationArgs calldata targetUserOp,
@@ -191,7 +302,9 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         } else {
             // Find the minGas (reduces number of iterations + checks if the call reverts).
             uint256 remainingGas = gasleft();
-            (targetSuccess, targetResult) = thisContract.simulateCall(entryPoint, target, targetCallData, gasleft());
+            bytes memory payload =
+                abi.encodeWithSelector(this.simulateCallAndRevert.selector, target, targetCallData, gasleft());
+            (targetSuccess, targetResult) = thisContract.simulateCall(entryPoint, payload, gasleft());
             minGas = remainingGas - gasleft();
 
             // If the call reverts then don't binary search.
@@ -212,7 +325,9 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
 
             uint256 midGas = (minGas + maxGas) / 2;
 
-            (bool success, bytes memory result) = thisContract.simulateCall(entryPoint, target, targetCallData, midGas);
+            bytes memory payload =
+                abi.encodeWithSelector(this.simulateCallAndRevert.selector, target, targetCallData, midGas);
+            (bool success, bytes memory result) = thisContract.simulateCall(entryPoint, payload, gasleft());
 
             if (success) {
                 // If the call is successful, reduce the maxGas and store this as the candidate
