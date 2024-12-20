@@ -157,7 +157,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         uint256 toleranceDelta,
         uint256 gasAllowance,
         bytes memory payload
-    ) public returns (TargetCallResult memory) {
+    ) internal returns (TargetCallResult memory) {
         processQueuedUserOps(queuedUserOps);
         // Extract out the target userOperation info.
 
