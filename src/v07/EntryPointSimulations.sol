@@ -160,11 +160,9 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     ) public returns (TargetCallResult memory) {
         processQueuedUserOps(queuedUserOps);
         // Extract out the target userOperation info.
-        PackedUserOperation calldata op = targetUserOp.op;
 
         // Run our target userOperation.
-        UserOpInfo memory opInfo;
-        _simulationOnlyValidations(op);
+        _simulationOnlyValidations(targetUserOp.op);
 
         uint256 minGas;
         bool targetSuccess;
@@ -222,7 +220,8 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         uint256 toleranceDelta,
         uint256 gasAllowance
     ) public returns (TargetCallResult memory) {
-        bytes memory payload = abi.encodeWithSelector(this._paymasterValidation.selector, 0, op, opInfo);
+        UserOpInfo memory opInfo;
+        bytes memory payload = abi.encodeWithSelector(this._paymasterValidation.selector, 0, targetUserOp.op, opInfo);
 
         return binarySearchGasLimit(
             queuedUserOps, targetUserOp, entryPoint, initialMinGas, toleranceDelta, gasAllowance, payload
@@ -237,7 +236,8 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         uint256 toleranceDelta,
         uint256 gasAllowance
     ) public returns (TargetCallResult memory) {
-        bytes memory payload = abi.encodeWithSelector(this._accountValidation.selector, 0, op, opInfo);
+        UserOpInfo memory opInfo;
+        bytes memory payload = abi.encodeWithSelector(this._accountValidation.selector, 0, targetUserOp.op, opInfo);
         return binarySearchGasLimit(
             queuedUserOps, targetUserOp, entryPoint, initialMinGas, toleranceDelta, gasAllowance, payload
         );
