@@ -438,7 +438,8 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
         uint256 opIndex,
         PackedUserOperation calldata op,
         UserOpInfo memory opInfo,
-        uint256 requiredPreFund
+        uint256 requiredPreFund,
+        uint256 pmVerificationGasLimit
     ) internal returns (bytes memory context, uint256 validationData) {
         unchecked {
             uint256 preGas = gasleft();
@@ -450,7 +451,6 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
                 revert FailedOp(opIndex, "AA31 paymaster deposit too low");
             }
             paymasterInfo.deposit = deposit - requiredPreFund;
-            uint256 pmVerificationGasLimit = mUserOp.paymasterVerificationGasLimit;
             try IPaymaster(paymaster).validatePaymasterUserOp{gas: pmVerificationGasLimit}(
                 op, opInfo.userOpHash, requiredPreFund
             ) returns (bytes memory _context, uint256 _validationData) {
@@ -519,6 +519,60 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
         aggregator = data.aggregator;
     }
 
+    function _accountValidation(uint256 opIndex, PackedUserOperation calldata userOp, UserOpInfo memory outOpInfo)
+        public
+        returns (uint256 validationData, uint256 paymasterValidationData, uint256 paymasterVerificationGasLimit)
+    {
+        uint256 preGas = gasleft();
+        MemoryUserOp memory mUserOp = outOpInfo.mUserOp;
+        _copyUserOpToMemory(userOp, mUserOp);
+        outOpInfo.userOpHash = getUserOpHash(userOp);
+
+        // Validate all numeric values in userOp are well below 128 bit, so they can safely be added
+        // and multiplied without causing overflow.
+        uint256 verificationGasLimit = mUserOp.verificationGasLimit;
+        uint256 maxGasValues = mUserOp.preVerificationGas | verificationGasLimit | mUserOp.callGasLimit
+            | mUserOp.paymasterVerificationGasLimit | mUserOp.paymasterPostOpGasLimit | mUserOp.maxFeePerGas
+            | mUserOp.maxPriorityFeePerGas;
+        require(maxGasValues <= type(uint120).max, "AA94 gas values overflow");
+
+        uint256 requiredPreFund = _getRequiredPrefund(mUserOp);
+        validationData = _validateAccountPrepayment(opIndex, userOp, outOpInfo, requiredPreFund, gasleft());
+
+        if (!_validateAndUpdateNonce(mUserOp.sender, mUserOp.nonce)) {
+            revert FailedOp(opIndex, "AA25 invalid account nonce");
+        }
+
+        unchecked {
+            if (preGas - gasleft() > verificationGasLimit) {
+                revert FailedOp(opIndex, "AA26 over verificationGasLimit");
+            }
+        }
+
+        bytes memory context;
+        uint256 remainingGas = gasleft();
+        if (mUserOp.paymaster != address(0)) {}
+        unchecked {
+            outOpInfo.prefund = requiredPreFund;
+            outOpInfo.contextOffset = getOffsetOfMemoryBytes(context);
+            outOpInfo.preOpGas = preGas - gasleft() + userOp.preVerificationGas;
+        }
+        paymasterVerificationGasLimit = ((remainingGas - gasleft()) * 115) / 100;
+    }
+
+    function _paymasterValidation(uint256 opIndex, PackedUserOperation calldata userOp, UserOpInfo memory outOpInfo)
+        public
+        returns (uint256 validationData, uint256 paymasterValidationData, uint256 paymasterVerificationGasLimit)
+    {
+        MemoryUserOp memory mUserOp = outOpInfo.mUserOp;
+        bytes memory context;
+        uint256 requiredPreFund = _getRequiredPrefund(mUserOp);
+        if (mUserOp.paymaster != address(0)) {
+            (context, paymasterValidationData) =
+                _validatePaymasterPrepayment(opIndex, userOp, outOpInfo, requiredPreFund, gasleft());
+        }
+    }
+
     /**
      * Validate account and paymaster (if defined) and
      * also make sure total validation doesn't exceed verificationGasLimit.
@@ -527,7 +581,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
      * @param userOp  - The userOp to validate.
      */
     function _validatePrepayment(uint256 opIndex, PackedUserOperation calldata userOp, UserOpInfo memory outOpInfo)
-        internal
+        public
         returns (uint256 validationData, uint256 paymasterValidationData, uint256 paymasterVerificationGasLimit)
     {
         uint256 preGas = gasleft();
@@ -559,8 +613,9 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
         bytes memory context;
         uint256 remainingGas = gasleft();
         if (mUserOp.paymaster != address(0)) {
+            uint256 pmVerificationGasLimit = outOpInfo.mUserOp.paymasterVerificationGasLimit;
             (context, paymasterValidationData) =
-                _validatePaymasterPrepayment(opIndex, userOp, outOpInfo, requiredPreFund);
+                _validatePaymasterPrepayment(opIndex, userOp, outOpInfo, requiredPreFund, pmVerificationGasLimit);
         }
         unchecked {
             outOpInfo.prefund = requiredPreFund;
