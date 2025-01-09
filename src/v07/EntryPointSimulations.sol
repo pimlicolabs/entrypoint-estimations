@@ -172,10 +172,16 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
             targetSuccess = true;
             targetResult = hex"";
             minGas = initialMinGas;
+
+            (targetSuccess, targetResult) = thisContract.simulateCall(entryPoint, payload, gasleft());
+
+            // If the call reverts then don't binary search.
+            if (!targetSuccess) {
+                return TargetCallResult(0, targetSuccess, targetResult);
+            }
         } else {
             // Find the minGas (reduces number of iterations + checks if the call reverts).
             uint256 remainingGas = gasleft();
-
             (targetSuccess, targetResult) = thisContract.simulateCall(entryPoint, payload, gasleft());
             minGas = remainingGas - gasleft();
 
