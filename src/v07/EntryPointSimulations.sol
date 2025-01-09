@@ -172,10 +172,16 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
             targetSuccess = true;
             targetResult = hex"";
             minGas = initialMinGas;
+
+            (targetSuccess, targetResult) = thisContract.simulateCall(entryPoint, payload, gasleft());
+
+            // If the call reverts then don't binary search.
+            if (!targetSuccess) {
+                return TargetCallResult(0, targetSuccess, targetResult);
+            }
         } else {
             // Find the minGas (reduces number of iterations + checks if the call reverts).
             uint256 remainingGas = gasleft();
-
             (targetSuccess, targetResult) = thisContract.simulateCall(entryPoint, payload, gasleft());
             minGas = remainingGas - gasleft();
 
@@ -255,7 +261,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
      * @param gasAllowance - The margin to add to the binary search to account for overhead.
      * @return optimalGas - The estimated gas limit for the call.
      */
-    function simulateCallData(
+    function binarySearchCallGasLimit(
         SimulationArgs[] calldata queuedUserOps,
         SimulationArgs calldata targetUserOp,
         address entryPoint,
@@ -299,6 +305,15 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
             targetSuccess = true;
             targetResult = hex"";
             minGas = initialMinGas;
+
+            bytes memory payload =
+                abi.encodeWithSelector(this.simulateCallAndRevert.selector, target, targetCallData, gasleft());
+            (targetSuccess, targetResult) = thisContract.simulateCall(entryPoint, payload, gasleft());
+
+            // If the call reverts then don't binary search.
+            if (!targetSuccess) {
+                return TargetCallResult(0, targetSuccess, targetResult);
+            }
         } else {
             // Find the minGas (reduces number of iterations + checks if the call reverts).
             uint256 remainingGas = gasleft();
