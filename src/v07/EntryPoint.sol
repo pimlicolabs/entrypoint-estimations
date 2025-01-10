@@ -564,8 +564,12 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
         public
         returns (uint256 validationData, uint256 paymasterValidationData, uint256 paymasterVerificationGasLimit)
     {
-        MemoryUserOp memory mUserOp = outOpInfo.mUserOp;
         bytes memory context;
+
+        MemoryUserOp memory mUserOp = outOpInfo.mUserOp;
+        _copyUserOpToMemory(userOp, mUserOp);
+        outOpInfo.userOpHash = getUserOpHash(userOp);
+
         uint256 requiredPreFund = _getRequiredPrefund(mUserOp);
         if (mUserOp.paymaster != address(0)) {
             (context, paymasterValidationData) =
