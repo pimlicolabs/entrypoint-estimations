@@ -125,6 +125,11 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     {
         try EP(payable(entryPoint)).delegateAndRevert{gas: gas}(address(thisContract), payload) {}
         catch (bytes memory reason) {
+            if (reason.length < 4) {
+                // Calls that revert due to out of gas revert with empty bytes.
+                return (false, new bytes(0));
+            }
+
             bytes memory reasonData = new bytes(reason.length - 4);
             for (uint256 i = 4; i < reason.length; i++) {
                 reasonData[i - 4] = reason[i];
