@@ -18,7 +18,6 @@ contract PimlicoTestInfiniteSupplyToken is ERC20 {
 
     /**
      * @dev Mints new tokens to a specified address.
-     * Can only be called by the contract owner.
      * @param to The address to receive the newly minted tokens.
      * @param amount The amount of tokens to mint.
      */
