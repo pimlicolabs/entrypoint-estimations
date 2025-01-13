@@ -17,6 +17,14 @@ contract PimlicoTestInfiniteSupplyToken is ERC20 {
     constructor(string memory name, string memory symbol) ERC20(name, symbol) {}
 
     /**
+     * @dev Returns the number of decimals used to get its user representation.
+     * Overrides the default 18 decimals to 6.
+     */
+    function decimals() public view virtual override returns (uint8) {
+        return 6;
+    }
+
+    /**
      * @dev Mints new tokens to a specified address.
      * @param to The address to receive the newly minted tokens.
      * @param amount The amount of tokens to mint.
