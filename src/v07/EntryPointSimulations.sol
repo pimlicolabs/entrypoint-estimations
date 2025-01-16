@@ -23,23 +23,10 @@ struct SimulationArgs {
 contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     EntryPointSimulations immutable thisContract = this;
     AggregatorStakeInfo private NOT_AGGREGATED = AggregatorStakeInfo(address(0), StakeInfo(0, 0));
-    SenderCreator private _senderCreator;
 
     // Thrown when the binary search fails due hitting the simulation gasLimit.
     error SimulationOutOfGas(uint256 optimalGas, uint256 minGas, uint256 maxGas);
     error innerCallResult(uint256 remainingGas);
-
-    function initSenderCreator() internal virtual {
-        //this is the address of the first contract created with CREATE by this address.
-        address createdObj = address(uint160(uint256(keccak256(abi.encodePacked(hex"d694", address(this), hex"01")))));
-        _senderCreator = SenderCreator(createdObj);
-    }
-
-    function senderCreator() internal view virtual override returns (SenderCreator) {
-        // return the same senderCreator as real EntryPoint.
-        // this call is slightly (100) more expensive than EntryPoint's access to immutable member
-        return _senderCreator;
-    }
 
     /**
      * simulation contract should not be deployed, and specifically, accounts should not trust
@@ -231,9 +218,12 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         uint256 toleranceDelta,
         uint256 gasAllowance
     ) public returns (TargetCallResult memory) {
+        UserOpInfo memory setupOpInfo;
+        _copyUserOpToMemory(targetUserOp.op, setupOpInfo.mUserOp);
+        _validateAccountPrepayment(0, targetUserOp.op, setupOpInfo, 0, gasleft());
+
         UserOpInfo memory opInfo;
         bytes memory payload = abi.encodeWithSelector(this._paymasterValidation.selector, 0, targetUserOp.op, opInfo);
-
         return binarySearchGasLimit(
             queuedUserOps, targetUserOp, entryPoint, initialMinGas, toleranceDelta, gasAllowance, payload
         );
@@ -404,10 +394,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
         return results[ops.length - 1];
     }
 
-    function _simulationOnlyValidations(PackedUserOperation calldata userOp) internal {
-        //initialize senderCreator(). we can't rely on constructor
-        initSenderCreator();
-
+    function _simulationOnlyValidations(PackedUserOperation calldata userOp) internal view {
         string memory revertReason =
             _validateSenderAndPaymaster(userOp.initCode, userOp.sender, userOp.paymasterAndData);
         // solhint-disable-next-line no-empty-blocks
