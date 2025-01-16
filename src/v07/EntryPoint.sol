@@ -28,7 +28,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard 
 
     using UserOperationLib for PackedUserOperation;
 
-    SenderCreator private immutable _senderCreator = new SenderCreator();
+    SenderCreator internal immutable _senderCreator = new SenderCreator();
 
     function senderCreator() internal view virtual returns (SenderCreator) {
         return _senderCreator;
